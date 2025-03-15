@@ -1,3 +1,5 @@
+// Add this at the top with other imports
+import CoreServices
 import Cocoa
 import Carbon
 import Dispatch
@@ -54,9 +56,12 @@ let shiftedSpecialChars: [Character: CGKeyCode] = [
 // 完全重写的ASCII typing函数
 func simulateAsciiTyping(text: String) {
     guard let source = CGEventSource(stateID: .combinedSessionState) else {
-        print("Failed to create event source.")
+        print("无法创建事件源")
         return
     }
+    
+    // 新增输入法切换功能
+    switchToEnglishInputSource()
     
     usleep(800000)
     
@@ -84,7 +89,7 @@ func simulateAsciiTyping(text: String) {
         
         // 修复2：增加错误处理
         guard let finalKeyCode = keyCode else {
-            print("Unsupported character: \(character) (Unicode: \(character.unicodeScalars.first!.value))")
+            print("不支持的字符: \(character) (Unicode: \(character.unicodeScalars.first!.value))")
             continue
         }
         
@@ -112,32 +117,66 @@ func simulateAsciiTyping(text: String) {
         if needsShift {
             let shiftUp = CGEvent(keyboardEventSource: source, virtualKey: shiftKeyCode, keyDown: false)!
             shiftUp.post(tap: .cghidEventTap)
-            usleep(50000) // 延长shift释放延迟
+            usleep(50000)
         }
         
-        usleep(40000)
+        usleep(25000) // 调整为25ms延迟
     }
     
     isTyping = false
-    print("Simulated ASCII typing completed.")
+    print("ASCII模拟输入完成")
 }
 
-// Unicode字符输入函数
+// 处理F10按键事件
+func handleF10KeyPress() {
+    let semaphore = DispatchSemaphore(value: 0)
+    
+    guard let clipboardContent = NSPasteboard.general.string(forType:.string) else {
+        print("剪贴板为空或非文本内容")
+        return
+    }
+    
+    print("检测到剪贴板内容: \(clipboardContent)")
+
+    // 修复：修正ASCII判断后的代码路径
+    if isAscii(text: clipboardContent) {
+        DispatchQueue.global().async {
+            print("准备ASCII模拟输入...")
+            usleep(2000000)
+            print("开始模拟输入...")
+            simulateAsciiTyping(text: clipboardContent)
+            semaphore.signal()
+        }
+    } else {
+        // 新增Unicode处理分支
+        DispatchQueue.global().async {
+            print("准备Unicode模拟输入...")
+            usleep(2000000)
+            print("开始模拟输入...")
+            simulateUnicodeTyping(text: clipboardContent)
+            semaphore.signal()
+        }
+    }
+
+    semaphore.wait()
+}
+
+
 func simulateUnicodeTyping(text: String) {
     guard let source = CGEventSource(stateID:.combinedSessionState) else {
-        print("Failed to create event source.")
+        print("无法创建事件源")
         return
     }
 
+    switchToEnglishInputSource()
     usleep(50000)
     
     shouldStopCurrentInput = false
     isTyping = true
 
     for character in text {
-        // 检查是否应该停止当前输入
         if shouldStopCurrentInput {
-            print("Input stopped by user.")
+            print("用户停止输入")
             break
         }
         
@@ -146,62 +185,29 @@ func simulateUnicodeTyping(text: String) {
 
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
-
+        
         keyDown?.keyboardSetUnicodeString(stringLength: 1, unicodeString: [uniChar])
         keyUp?.keyboardSetUnicodeString(stringLength: 1, unicodeString: [uniChar])
 
         keyDown?.post(tap:.cghidEventTap)
-        usleep(20000) // 延长按键延迟
+        usleep(80000)
         keyUp?.post(tap:.cghidEventTap)
 
-        usleep(40000) // 延长字符间延迟
+        usleep(120000)
     }
     
     isTyping = false
-    print("Simulated Unicode typing completed.")
-}
-
-// 处理F10按键事件
-func handleF10KeyPress() {
-    let semaphore = DispatchSemaphore(value: 0)
-    
-    guard let clipboardContent = NSPasteboard.general.string(forType:.string) else {
-        print("Clipboard is empty or does not contain text.")
-        return
-    }
-    
-    print("Clipboard content detected: \(clipboardContent)")
-
-    // 检查剪贴板内容并模拟键入
-    if isAscii(text: clipboardContent) {
-        DispatchQueue.global().async {
-            print("Preparing to simulate ASCII typing...")
-            usleep(2000000) // 2秒延迟 - 给用户准备时间
-            print("Starting simulation...")
-            simulateAsciiTyping(text: clipboardContent)
-            semaphore.signal()
-        }
-    } else {
-        DispatchQueue.global().async {
-            print("Preparing to simulate Unicode typing...")
-            usleep(2000000) // 2秒延迟
-            print("Starting simulation...")
-            simulateUnicodeTyping(text: clipboardContent)
-            semaphore.signal()
-        }
-    }
-
-    // 等待输入完成
-    semaphore.wait()
+    print("Unicode模拟输入完成")
 }
 
 // 处理F12按键事件 - 停止当前输入
 func handleF12KeyPress() {
     if isTyping {
         shouldStopCurrentInput = true
-        print("Stopping current input...")
+        isTyping = false // 增加状态重置
+        print("正在停止当前输入...")
     } else {
-        print("No active typing to stop.")
+        print("当前无进行中的输入操作")
     }
 }
 
@@ -213,7 +219,7 @@ func isAscii(text: String) -> Bool {
 // 事件回调函数
 func eventTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent, refcon: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {
     if type == CGEventType.tapDisabledByTimeout || type == CGEventType.tapDisabledByUserInput {
-        print("Re-acquiring assistive functionality.")
+        print("正在重新获取辅助功能权限")
         if let machPortPointer = refcon?.assumingMemoryBound(to: CFMachPort.self).pointee {
             CGEvent.tapEnable(tap: machPortPointer, enable: true)
         }
@@ -223,14 +229,14 @@ func eventTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent,
     if type == CGEventType.keyDown {
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         if keyCode == kVK_F10 {
-            print("F10 key detected")
+            print("检测到F10按键")
             DispatchQueue.global().async {
                 handleF10KeyPress()
             }
             // 返回nil以消耗这个事件
             return nil
         } else if keyCode == kVK_F12 {
-            print("F12 key detected")
+            print("检测到F12按键")
             handleF12KeyPress()
             // 消耗F12事件
             return nil
@@ -256,7 +262,7 @@ func monitorKeyEvents() {
     )
 
     guard let unwrappedEventTap = eventTap else {
-        print("Please enable assistive functionality.")
+        print("开启辅助功能权限.")
         exit(1)
     }
 
@@ -268,8 +274,8 @@ func monitorKeyEvents() {
     CGEvent.tapEnable(tap: unwrappedEventTap, enable: true)
 
     print("Keyboard simulator started.")
-    print("Press F10 to type clipboard content")
-    print("Press F12 to stop current typing")
+    print("按下 F10 把剪切板转为按键输入")
+    print("按下 F12 停止输入")
     CFRunLoopRun()
 }
 
@@ -279,3 +285,24 @@ func main() {
 }
 
 main()
+
+// 新增输入法切换函数
+private func switchToEnglishInputSource() {
+    let englishSources = TISCreateInputSourceList([
+        "TISPropertyInputSourceCategory" as CFString: "TISCategoryKeyboardInputSource" as CFString,
+        "TISPropertyInputSourceType" as CFString: "TISTypeKeyboardLayout" as CFString
+    ] as CFDictionary, false).takeRetainedValue() as! [TISInputSource]
+    
+    guard let abcKeyboard = englishSources.first(where: { source in
+        guard let id = TISGetInputSourceProperty(source, "TISPropertyInputSourceID" as CFString) else { return false }
+        let sourceID = Unmanaged<CFString>.fromOpaque(id).takeUnretainedValue() as String
+        // 匹配ABC和简体拼音输入法
+        return sourceID == "com.apple.keylayout.ABC" || sourceID == "com.apple.inputmethod.SCIM.ITABC"
+    }) else {
+        print("English input source not found")
+        return
+    }
+    
+    TISSelectInputSource(abcKeyboard)
+    usleep(500000)
+}
